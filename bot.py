@@ -342,6 +342,12 @@ def main():
     log.info("🚀 Starting SMS Bomber Bot...")
     log.info(f"📋 Loaded {len(ENDPOINTS)} endpoints")
 
+    # Python 3.14+ removed auto event-loop creation — create one explicitly
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     app = Application.builder().token(TOKEN).build()
 
     # Register handlers
