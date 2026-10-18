@@ -19,25 +19,27 @@ class Result:
     success: bool
     status: int = 0
     detail: str = ""
+    proxy: str = ""
 
 
-async def fire_one(client: httpx.AsyncClient, ep: dict, phone: str) -> Result:
+async def fire_one(client: httpx.AsyncClient, ep: dict, phone: str, proxy: str = "") -> Result:
     """Fire a single endpoint and return a Result."""
     url = ep["url"].replace("{phone}", phone)
     method = ep["method"]
     headers = dict(ep["headers"])
+    proxy_host = proxy.split("@")[-1] if proxy else "direct"
 
     try:
         if method == "GET":
-            resp = await client.get(url, headers=headers, timeout=15)
+            resp = await client.get(url, headers=headers, timeout=12)
         else:
             body_fn = ep["body"]
             payload = body_fn(phone) if callable(body_fn) else None
 
             if ep.get("form"):
-                resp = await client.post(url, headers=headers, data=payload, timeout=15)
+                resp = await client.post(url, headers=headers, data=payload, timeout=12)
             else:
-                resp = await client.post(url, headers=headers, json=payload, timeout=15)
+                resp = await client.post(url, headers=headers, json=payload, timeout=12)
 
         ok = 200 <= resp.status_code < 300
         detail = ""
@@ -55,19 +57,19 @@ async def fire_one(client: httpx.AsyncClient, ep: dict, phone: str) -> Result:
         except Exception:
             detail = str(resp.status_code)
 
-        return Result(name=ep["name"], success=ok, status=resp.status_code, detail=str(detail))
+        return Result(name=ep["name"], success=ok, status=resp.status_code, detail=str(detail), proxy=proxy_host)
 
     except httpx.TimeoutException:
-        return Result(name=ep["name"], success=False, status=0, detail="⏱️ Timeout")
+        return Result(name=ep["name"], success=False, status=0, detail="⏱️ Timeout", proxy=proxy_host)
     except httpx.ConnectError:
-        return Result(name=ep["name"], success=False, status=0, detail="🔌 Connection failed")
+        return Result(name=ep["name"], success=False, status=0, detail="🔌 Connection failed", proxy=proxy_host)
     except Exception as e:
-        return Result(name=ep["name"], success=False, status=0, detail=str(e)[:80])
+        return Result(name=ep["name"], success=False, status=0, detail=str(e)[:80], proxy=proxy_host)
 
 
 async def fire_all(phone: str, on_result=None) -> list[Result]:
     """
-    Fire all endpoints concurrently.
+    Fire all endpoints concurrently using distributed rotating proxies.
 
     Args:
         phone:     10-digit mobile number string
@@ -76,21 +78,30 @@ async def fire_all(phone: str, on_result=None) -> list[Result]:
     Returns:
         List of Result objects
     """
+    from proxies import proxy_pool
+
     results: list[Result] = []
+    total = len(ENDPOINTS)
 
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        tasks = []
-        for i, ep in enumerate(ENDPOINTS):
-            tasks.append(_fire_and_report(client, ep, phone, i, len(ENDPOINTS), results, on_result))
+    # Distribute endpoints across proxies round-robin
+    tasks = []
+    for i, ep in enumerate(ENDPOINTS):
+        proxy = proxy_pool.get_next()
+        tasks.append(_fire_with_proxy(ep, phone, proxy, i, total, results, on_result))
 
-        await asyncio.gather(*tasks)
-
+    await asyncio.gather(*tasks)
     return results
 
 
-async def _fire_and_report(client, ep, phone, idx, total, results, on_result):
-    """Wrapper that fires one endpoint and invokes the callback."""
-    result = await fire_one(client, ep, phone)
+async def _fire_with_proxy(ep: dict, phone: str, proxy: str | None, idx: int, total: int, results: list[Result], on_result):
+    """Execute request via dedicated proxy client, falling back to direct if proxy fails."""
+    client_kwargs = {"follow_redirects": True, "timeout": 12.0}
+    if proxy:
+        client_kwargs["proxy"] = proxy
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        result = await fire_one(client, ep, phone, proxy=proxy or "")
+
     results.append(result)
     if on_result:
         await on_result(result, idx, total)
@@ -114,10 +125,11 @@ def build_summary(results: list[Result], phone: str) -> str:
     ]
 
     for r in results:
+        proxy_info = f"  `[{r.proxy}]`" if r.proxy else ""
         if r.success:
-            lines.append(f"  ✅ {r.name}  •  `{r.status}`")
+            lines.append(f"  ✅ {r.name}{proxy_info}  •  `{r.status}`")
         else:
-            lines.append(f"  ❌ {r.name}  •  _{r.detail}_")
+            lines.append(f"  ❌ {r.name}{proxy_info}  •  _{r.detail}_")
 
     lines.append("")
     lines.append("*━━━━━━━━━━━━━━━━━━━━━━━━━━━*")

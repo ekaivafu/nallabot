@@ -28,6 +28,7 @@ from telegram.ext import (
 )
 
 from endpoints import ENDPOINTS
+from proxies import proxy_pool
 from sender import fire_all, build_summary
 
 # ── Load env & configure ─────────────────────────────────────
@@ -57,13 +58,14 @@ WELCOME_TEXT = """
 🔥 *━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*
 
   Triggers OTP from *{count} platforms* simultaneously
+  ⚡ *Proxy Pool:* {proxies} high-speed rotating proxies
   
   🛍️ Meesho  •  🏦 Ram Fincorp  •  🚗 Maruti Suzuki
   🏠 NoBroker  •  🎫 District  •  📦 Delhivery
   🎬 BookMyShow  •  ⚡ Blinkit  •  📱 Jio
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-""".format(count=len(ENDPOINTS))
+""".format(count=len(ENDPOINTS), proxies=proxy_pool.total)
 
 ENTER_PHONE_TEXT = """
 📲 *Enter Mobile Number*
@@ -341,6 +343,7 @@ def main():
 
     log.info("🚀 Starting SMS Bomber Bot...")
     log.info(f"📋 Loaded {len(ENDPOINTS)} endpoints")
+    log.info(f"🛡️ Configured {proxy_pool.total} rotating proxies")
 
     # Python 3.14+ removed auto event-loop creation — create one explicitly
     try:
